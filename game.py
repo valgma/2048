@@ -236,15 +236,15 @@ def sim_from_state(state, score, move_count):
         else:
             move_count += 1
 
-    return state, move_count, score
+    return state, score, move_count
 
 
 @jit(nopython=True)
 def sim_one_game():
     state = init_game()
-    state, move_count, score = sim_from_state(state, 0, 0)
+    state, score, move_count = sim_from_state(state, 0, 0)
 
-    return state, move_count, score
+    return state, score, move_count
 
 
 @jit(nopython=True)
@@ -256,27 +256,29 @@ def get_next_move_simpleMC(state, score, move_count, n=1000):
 
     for move in range(4):
         move_state = np.copy(state)
-        can_move, score = move_simple(move_state, move, score)
+        can_move, move_score = move_simple(move_state, move, score)
         if can_move:
             gen_new_tile(move_state)
-            # move_score, _ = sim_n_games_from_state(move_state, n)
-            _, move_score = sim_n_games_from_state(move_state, n)  # seems move count is better
 
-            if move_score > best_score:
+            total_move_score, total_move_count = sim_n_games_from_state(move_state, move_score, move_count + 1, n)
+
+            if total_move_score > best_score:
                 best_move = move
-                best_score = move_score
+                best_score = total_move_score
 
     return best_move
 
 
-@jit(nopython=True)
-def sim_n_games_from_state(state, n):
+# @jit(nopython=True)
+from numba import njit, prange
+@njit(parallel=True)
+def sim_n_games_from_state(state, score, move_count, n):
     total_score, total_move_count = 0, 0
 
-    for i in range(n):
-        _, move_count, score = sim_from_state(state, 0, 0)
-        total_move_count += move_count
-        total_score += score
+    for i in prange(n):
+        _, _score, _move_count = sim_from_state(state, score, move_count)
+        total_move_count += _move_count
+        total_score += _score
 
     return total_score, total_move_count
 
@@ -286,7 +288,7 @@ def sim_n_games(n):
     total_score = 0
     t1 = time()
     for i in range(n):
-        _, move_count, score = sim_one_game()
+        _, score, move_count = sim_one_game()
         total_move_count += move_count
         total_score += score
     t2 = time()
@@ -298,7 +300,7 @@ def sim_n_games(n):
     print('games: %d, time: %f, avg_score: %f, avg_move_count: %f' % (n, total_time, avg_score, avg_move_count))
 
 
-def play_using_simpleMC():
+def play_using_simpleMC(sims_per_move=100):
     state = init_game()
     move_count = 0
     score = 0
@@ -306,7 +308,7 @@ def play_using_simpleMC():
     t1 = time()
 
     while can_play:
-        move = get_next_move_simpleMC(state, score, move_count, 2000)
+        move = get_next_move_simpleMC(state, score, move_count, sims_per_move)
         can_play, score = move_full(state, move, score)
 
         if not can_play:
@@ -321,25 +323,33 @@ def play_using_simpleMC():
         else:
             move_count += 1
 
-        if move_count % 100 == 0:
-            t2 = time()
-            print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
-            t1 = t2
+        # if move_count % 100 == 0:
+        #     t2 = time()
+        #     print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
+        #     t1 = t2
 
-    return state, move_count, score
+    return state, score, move_count
 
 
 if __name__ == '__main__':
     # interactive()
 
     # call once to compile the functions
-    state, move_count, score = sim_one_game()
+    state, score, move_count = sim_one_game()
     # print(state)
     # print('move_count: %d, score: %d' % (move_count, score))
 
     # sim_n_games(10000)
+    # t1 = time()
+    # state, score, move_count = play_using_simpleMC()
+    # t2 = time()
+    # print(state)
+    # print('score: %d, move_count: %d, time: %f' % (score, move_count, t2 - t1))
     t1 = time()
-    state, move_count, score = play_using_simpleMC()
-    t2 = time()
-    print(state)
-    print('score: %d, move_count: %d, time: %f' % (score, move_count, t2 - t1))
+    for sims_per_move in (100, 1000):
+        for i in range(10):
+            state, score, move_count = play_using_simpleMC(sims_per_move)
+            t2 = time()
+            best_tile = np.max(state)
+            print('sims: %d; i: %d; best: %d; score: %d, time: %.3f' % (sims_per_move, i, best_tile, score, t2 - t1))
+            t1 = time()
