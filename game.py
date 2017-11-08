@@ -23,12 +23,19 @@ def move_full(state, move, score=0, deterministic=False):
     if not move_done:
         return move_done, score
 
+    gen_new_tile(state, deterministic)
+
+    return move_done, score
+
+
+@jit(nopython=True)
+def gen_new_tile(state, deterministic=False):
     if deterministic:
         for i in range(4):
             for j in range(4):
                 if state[i, j] == 0:
                     state[i, j] = 2
-                    return move_done, score
+                    return
 
     # zero_idx = np.where(state == 0)
     # zero_idx = np.ravel_multi_index(zero_idx, (4, 4))
@@ -48,8 +55,6 @@ def move_full(state, move, score=0, deterministic=False):
     i, j = zero_idx[random.randrange(n)]
     new_block = 1 if random.random() < 0.9 else 2
     state[i, j] = new_block
-
-    return move_done, score
 
 
 @jit(nopython=True)
@@ -211,11 +216,9 @@ def interactive():
 
 
 @jit(nopython=True)
-def sim_one_game():
+def sim_from_state(state, score, move_count):
+    state = np.copy(state)
     can_play = True
-    state = init_game()
-    score = 0
-    move_count = 0
 
     while can_play:
         move = random.randrange(4)
@@ -236,6 +239,48 @@ def sim_one_game():
     return state, move_count, score
 
 
+@jit(nopython=True)
+def sim_one_game():
+    state = init_game()
+    state, move_count, score = sim_from_state(state, 0, 0)
+
+    return state, move_count, score
+
+
+@jit(nopython=True)
+def get_next_move_simpleMC(state, score, move_count, n=1000):
+    """For each move, simulate n games and check which one gives best avg/total score
+    """
+    best_move = 0
+    best_score = 0
+
+    for move in range(4):
+        move_state = np.copy(state)
+        can_move, score = move_simple(move_state, move, score)
+        if can_move:
+            gen_new_tile(move_state)
+            # move_score, _ = sim_n_games_from_state(move_state, n)
+            _, move_score = sim_n_games_from_state(move_state, n)  # seems move count is better
+
+            if move_score > best_score:
+                best_move = move
+                best_score = move_score
+
+    return best_move
+
+
+@jit(nopython=True)
+def sim_n_games_from_state(state, n):
+    total_score, total_move_count = 0, 0
+
+    for i in range(n):
+        _, move_count, score = sim_from_state(state, 0, 0)
+        total_move_count += move_count
+        total_score += score
+
+    return total_score, total_move_count
+
+
 def sim_n_games(n):
     total_move_count = 0
     total_score = 0
@@ -253,6 +298,37 @@ def sim_n_games(n):
     print('games: %d, time: %f, avg_score: %f, avg_move_count: %f' % (n, total_time, avg_score, avg_move_count))
 
 
+def play_using_simpleMC():
+    state = init_game()
+    move_count = 0
+    score = 0
+    can_play = True
+    t1 = time()
+
+    while can_play:
+        move = get_next_move_simpleMC(state, score, move_count, 2000)
+        can_play, score = move_full(state, move, score)
+
+        if not can_play:
+            for trial_move in range(4):
+                if trial_move != move:
+                    can_play, score = move_full(state, trial_move, score)
+                if can_play:
+                    break
+
+        if not can_play:
+            break
+        else:
+            move_count += 1
+
+        if move_count % 100 == 0:
+            t2 = time()
+            print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
+            t1 = t2
+
+    return state, move_count, score
+
+
 if __name__ == '__main__':
     # interactive()
 
@@ -261,4 +337,9 @@ if __name__ == '__main__':
     # print(state)
     # print('move_count: %d, score: %d' % (move_count, score))
 
-    sim_n_games(10000)
+    # sim_n_games(10000)
+    t1 = time()
+    state, move_count, score = play_using_simpleMC()
+    t2 = time()
+    print(state)
+    print('score: %d, move_count: %d, time: %f' % (score, move_count, t2 - t1))
