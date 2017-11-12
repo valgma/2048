@@ -2,6 +2,7 @@ import numpy as np
 from numba import jit, njit, prange
 import random
 from time import time
+import math
 
 UP = 0
 DOWN = 1
@@ -250,29 +251,6 @@ def sim_one_game():
     return state, score, move_count
 
 
-@jit(nopython=True)
-def get_next_move_simpleMC(state, score, move_count, n=1000):
-    """For each move, simulate n games and check which one gives best avg/total score
-    """
-    best_move = 0
-    best_score = 0
-
-    for move in range(4):
-        move_state = np.copy(state)
-        can_move, move_score = move_simple(move_state, move, score)
-        if can_move:
-            # NB! cannot forget to add new random tile
-            total_move_score, total_move_count = sim_n_games_from_state(move_state, move_score, move_count + 1, n, True)
-
-            # total_move_score = total_move_count  # NB! for testing move_count vs score
-
-            if total_move_score > best_score:
-                best_move = move
-                best_score = total_move_score
-
-    return best_move
-
-
 # @jit(nopython=True)
 @njit(parallel=True)
 def sim_n_games_from_state(state, score, move_count, n, gen_tile=False):
@@ -299,7 +277,119 @@ def sim_n_games(n):
     print('games: %d, time: %f, avg_score: %f, avg_move_count: %f' % (n, total_time, avg_score, avg_move_count))
 
 
-def play_using_simpleMC(sims_per_move=100):
+@jit(nopython=True)
+def get_next_move_simpleMC(state, score, move_count, n):
+    """For each move, simulate n games and check which one gives best avg/total score
+    """
+    best_move = 0
+    best_score = 0
+
+    for move in range(4):
+        move_state = np.copy(state)
+        can_move, move_score = move_simple(move_state, move, score)
+        if can_move:
+            # NB! cannot forget to add new random tile
+            total_move_score, total_move_count = sim_n_games_from_state(move_state, move_score, move_count + 1, n, True)
+
+            # total_move_score = total_move_count  # NB! for testing move_count vs score
+
+            if total_move_score > best_score:
+                best_move = move
+                best_score = total_move_score
+
+    return best_move
+
+
+def get_next_move_MCTS(state, score, move_count, n):
+    """For each move, build MCTS. pick best move
+    """
+    best_move = 0
+    c_puct = 1.0  # exploration coef, bigger should indicate more exploration (randomness)
+    scale = np.maximum(1.05*score, 1000)  # divide with this the rollout result, probably assumed that v should be reasonably small?
+
+    # need to keep the tree somehow, use dict initially
+    # tree = {(state, a): (0, 0, 0, 0.25) for a in range(4)}  # all new leaves get expanded like this
+    tree = dict()
+    for a in range(4):
+        tree[(state.tostring(), a)] = (0, 0, 0, 0.25)
+
+    # now sim n games, when game reaches leaf -> simply evaluate game
+    for i in range(n):
+        path = []  # to keep track of current path, for updating
+        cur_state = np.copy(state)
+        cur_score = score
+        cur_move_count = move_count
+
+        cur_state_flat = cur_state.tostring()
+        # run till get to leaf
+        while (cur_state_flat, 0) in tree:
+            # evaluate which move to take based on current tree
+            move_scores = np.zeros(4)
+
+            # s = [tree[(cur_state_flat, a)] for a in range(4)]  # get current tree nodes for all a's
+            # n_s = sum([s[a][0] for a in range(4)])  # sum all visit counts for u calc
+            s = []
+            n_s = 0
+            for a in range(4):
+                s.append(tree[(cur_state_flat, a)])
+                n_s += s[a][0]
+
+            n_s_sqrt = math.sqrt(n_s)
+            for a in range(4):
+                n_a, w_a, q_a, p_a = s[a]
+                u_a = c_puct * p_a * n_s_sqrt / (1 + n_a)
+                move_scores[a] = q_a + u_a
+
+            next_move = np.argmax(move_scores)
+            can_play, cur_score = move_full(cur_state, next_move, cur_score)  # NB! can it be a problem if cannot play??
+
+            if not can_play:
+                moves = np.argsort(move_scores)  # slow...
+                for i in range(3, -1, -1):
+                    next_move = moves[i]
+                    can_play, cur_score = move_full(cur_state, next_move, cur_score)
+                    if can_play:
+                        break
+
+            if not can_play:
+                break
+            else:
+                path.append((cur_state_flat, next_move))  # remember which move was chosen
+                cur_move_count += 1
+                cur_state_flat = cur_state.tostring()
+
+        # now we're in leaf - need to expand and get score
+        # NB! this is place for NN estimation
+        # expand
+        for a in range(4):
+            tree[(cur_state_flat, a)] = (0, 0, 0, 0.25)
+
+        # get score - play till end
+        _, cur_score, cur_move_count = sim_from_state(cur_state, cur_score, cur_move_count, False)
+        v = cur_score / scale
+
+        # update all path nodes in tree
+        for s, a in path:
+            n_a, w_a, q_a, p_a = tree[(s, a)]
+            n_a += 1
+            w_a += v
+            q_a = w_a / n_a
+            tree[(s, a)] = n_a, w_a, q_a, p_a
+
+    # choose most visited action
+    n_best = 0
+    for a in range(4):
+        n_a = tree[(state.tostring(), a)][0]
+
+        if n_a > n_best:
+            best_move = a
+            n_best = n_a
+
+    # print(tree[(state.tostring(), best_move)][2])
+    return best_move
+
+
+def play_using_simpleMC(sims_per_move):
     state = init_game()
     move_count = 0
     score = 0
@@ -322,10 +412,41 @@ def play_using_simpleMC(sims_per_move=100):
         else:
             move_count += 1
 
-        # if move_count % 100 == 0:
-        #     t2 = time()
-        #     print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
-        #     t1 = t2
+            # if move_count % 100 == 0:
+            #     t2 = time()
+            #     print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
+            #     t1 = t2
+
+    return state, score, move_count
+
+
+def play_using_MCTS(sims_per_move):
+    state = init_game()
+    move_count = 0
+    score = 0
+    can_play = True
+    t1 = time()
+
+    while can_play:
+        move = get_next_move_MCTS(state, score, move_count, sims_per_move)
+        can_play, score = move_full(state, move, score)
+
+        if not can_play:
+            for trial_move in range(4):
+                if trial_move != move:
+                    can_play, score = move_full(state, trial_move, score)
+                if can_play:
+                    break
+
+        if not can_play:
+            break
+        else:
+            move_count += 1
+
+            if move_count % 100 == 0:
+                t2 = time()
+                print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
+                t1 = t2
 
     return state, score, move_count
 
@@ -340,17 +461,24 @@ if __name__ == '__main__':
 
     # sim_n_games(10000)
 
-    # t1 = time()
-    # state, score, move_count = play_using_simpleMC()
-    # t2 = time()
-    # print(state)
-    # print('score: %d, move_count: %d, time: %f' % (score, move_count, t2 - t1))
-
     t1 = time()
-    for sims_per_move in (100, 1000, 10000):
-        for i in range(5):
-            state, score, move_count = play_using_simpleMC(sims_per_move)
-            t2 = time()
-            best_tile = np.max(state)
-            print('sims: %d; i: %d; best: %d; score: %d, time: %.3f' % (sims_per_move, i, best_tile, score, t2 - t1))
-            t1 = time()
+    state, score, move_count = play_using_simpleMC(500)
+    t2 = time()
+    print(state)
+    print('score: %d, move_count: %d, time: %f' % (score, move_count, t2 - t1))
+
+    # t1 = time()
+    # for sims_per_move in (100, 1000, 10000):
+    #     for i in range(5):
+    #         state, score, move_count = play_using_simpleMC(sims_per_move)
+    #         t2 = time()
+    #         best_tile = np.max(state)
+    #         print('sims: %d; i: %d; best: %d; score: %d, time: %.3f' % (sims_per_move, i, best_tile, score, t2 - t1))
+    #         t1 = time()
+
+    # MCTS
+    t1 = time()
+    state, score, move_count = play_using_MCTS(2000)
+    t2 = time()
+    print(state)
+    print('score: %d, move_count: %d, time: %f' % (score, move_count, t2 - t1))
