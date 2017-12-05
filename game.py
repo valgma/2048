@@ -3,11 +3,15 @@ from numba import jit, njit, prange
 import random
 from time import time
 import math
+import json
+import os
+import sys
 
 UP = 0
 DOWN = 1
 LEFT = 2
 RIGHT = 3
+
 
 
 @jit(nopython=True)
@@ -242,6 +246,24 @@ def sim_from_state(state, score, move_count, gen_tile=False):
 
     return state, score, move_count
 
+MAX_POWER = 20  # Maximum power of two present in the board
+INPUT_SHAPE = (MAX_POWER, 4, 4)
+
+@jit
+def convert_game_to_bin(data):
+    game = np.array(data)
+    bin_rep = np.zeros(INPUT_SHAPE, dtype=bool)
+    for i in range(MAX_POWER):  # For each power of twp
+        bin_rep[i][game == i] = 1  # Assign True value
+    return np.expand_dims(np.array(bin_rep), axis=0)
+
+SCORE_SCALER = 100000
+@jit
+def scale_score(score):
+    return min(score/SCORE_SCALER, 1)
+@jit
+def descale_score(score_out):
+    return score_out*SCORE_SCALER
 
 @jit(nopython=True)
 def sim_one_game():
@@ -300,7 +322,7 @@ def get_next_move_simpleMC(state, score, move_count, n):
     return best_move
 
 
-def get_next_move_MCTS(state, score, move_count, n):
+def get_next_move_MCTS(state, score, move_count, n, pred_model):
     """For each move, build MCTS. pick best move
     """
     best_move = 0
@@ -361,8 +383,23 @@ def get_next_move_MCTS(state, score, move_count, n):
         # now we're in leaf - need to expand and get score
         # NB! this is place for NN estimation
         # expand
-        for a in range(4):
-            tree[(cur_state_flat, a)] = (0, 0, 0, 0.25)
+        if pred_model is None:
+            probabilities = [0.25, 0.25, 0.25, 0.25]
+        else:
+            cur_state_bin = convert_game_to_bin(cur_state)
+            probabilities, pred_score = pred_model.predict(cur_state_bin)
+            probabilities = probabilities[0]
+            pred_score = descale_score(pred_score[0])
+        for a in range(4):  # Update probabilities
+            tree[(cur_state_flat, a)] = (0, 0, 0, probabilities[a])
+
+        if pred_model is not None:
+            for s, a in path:  # Update path with estimated score
+                n_a, w_a, q_a, p_a = tree[(s, a)]
+                n_a += 1
+                w_a += pred_score
+                q_a = w_a / n_a
+                tree[(s, a)] = n_a, w_a, q_a, p_a
 
         # get score - play till end
         _, cur_score, cur_move_count = sim_from_state(cur_state, cur_score, cur_move_count, False)
@@ -377,16 +414,13 @@ def get_next_move_MCTS(state, score, move_count, n):
             tree[(s, a)] = n_a, w_a, q_a, p_a
 
     # choose most visited action
-    n_best = 0
+    move_probabilities = []
     for a in range(4):
-        n_a = tree[(state.tostring(), a)][0]
-
-        if n_a > n_best:
-            best_move = a
-            n_best = n_a
+        p = tree[(state.tostring(), a)][0]
+        move_probabilities.append(p)
 
     # print(tree[(state.tostring(), best_move)][2])
-    return best_move
+    return move_probabilities
 
 
 def play_using_simpleMC(sims_per_move):
@@ -412,23 +446,33 @@ def play_using_simpleMC(sims_per_move):
         else:
             move_count += 1
 
-            # if move_count % 100 == 0:
-            #     t2 = time()
-            #     print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
-            #     t1 = t2
+            if move_count % 200 == 0:
+                 t2 = time()
+                 print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
+                 t1 = t2
 
     return state, score, move_count
 
 
-def play_using_MCTS(sims_per_move):
+def play_using_MCTS(sims_per_move, pred_model=None):
     state = init_game()
     move_count = 0
     score = 0
     can_play = True
     t1 = time()
 
+    states = []  # All game-states that the MCTS chose
+    move_probabilities = []  # Probabilities for all moves for all chose states
+
     while can_play:
-        move = get_next_move_MCTS(state, score, move_count, sims_per_move)
+        moves = get_next_move_MCTS(state, score, move_count, sims_per_move, pred_model)
+        highest_prob = max(moves)
+        move = moves.index(highest_prob)  # Select move with highest probability
+
+        if sum(moves) != 0:  # Add to states
+            states.append(state.tolist())
+            move_probabilities.append(moves)
+
         can_play, score = move_full(state, move, score)
 
         if not can_play:
@@ -448,8 +492,20 @@ def play_using_MCTS(sims_per_move):
                 print('move: %d, score: %d, time: %f' % (move_count, score, t2 - t1))
                 t1 = t2
 
-    return state, score, move_count
+    print('Score: %d, move_count: %d, time: %f' % (score, move_count, time() - t1))
+    sys.stdout.flush()
+    return state, score, move_count, states, move_probabilities
 
+def save_game_to_file(score, states, probabilities):
+    data = {"score": score, "states": states, "probabilities": probabilities}
+    json_data = json.dumps(data)
+
+    dir_name = "games"
+    if not os.path.exists(dir_name):
+        os.makedirs(dir_name)
+    total_games = len([name for name in os.listdir(dir_name) if os.path.isfile(dir_name+"/"+name)])
+    with open(dir_name+"/%d.txt" % (total_games+1, ), "w") as text_file:
+        text_file.write(json_data)
 
 if __name__ == '__main__':
     # interactive()
@@ -460,12 +516,13 @@ if __name__ == '__main__':
     # print('move_count: %d, score: %d' % (move_count, score))
 
     # sim_n_games(10000)
-
+    """
     t1 = time()
     state, score, move_count = play_using_simpleMC(500)
     t2 = time()
     print(state)
     print('score: %d, move_count: %d, time: %f' % (score, move_count, t2 - t1))
+    """
 
     # t1 = time()
     # for sims_per_move in (100, 1000, 10000):
@@ -478,7 +535,13 @@ if __name__ == '__main__':
 
     # MCTS
     t1 = time()
-    state, score, move_count = play_using_MCTS(2000)
+    state, score, move_count, states, move_probabilities = play_using_MCTS(2000)
     t2 = time()
     print(state)
     print('score: %d, move_count: %d, time: %f' % (score, move_count, t2 - t1))
+
+    save_game = True
+    if save_game:
+        save_game_to_file(score, states, move_probabilities)  # Save game to file
+
+
