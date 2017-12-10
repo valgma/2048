@@ -110,7 +110,7 @@ def init_model():
     value_out = value_head(residual_output)
 
     model = Model(inputs=x, outputs=(policy_out, value_out))  #
-    model.compile(loss=["mean_squared_error", "mean_squared_error"], optimizer=Adam(), metrics=['accuracy'])
+    model.compile(loss=["categorical_crossentropy", "mean_squared_error"], optimizer=Adam(), metrics=['accuracy'])
 
     return model
 
