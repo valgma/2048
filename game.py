@@ -273,12 +273,12 @@ def sim_one_game():
     return state, score, move_count
 
 
-# @jit(nopython=True)
-@njit(parallel=True)
+@jit(nopython=True)
+# @njit(parallel=True)
 def sim_n_games_from_state(state, score, move_count, n, gen_tile=False):
     total_score, total_move_count = 0, 0
 
-    for i in prange(n):
+    for i in range(n):
         _, _score, _move_count = sim_from_state(state, score, move_count, gen_tile)
         total_move_count += _move_count
         total_score += _score
@@ -385,25 +385,17 @@ def get_next_move_MCTS(state, score, move_count, n, pred_model):
         # expand
         if pred_model is None:
             probabilities = [0.25, 0.25, 0.25, 0.25]
+            # get score - play till end
+            _, cur_score, _ = sim_from_state(cur_state, cur_score, cur_move_count, False)
+            v = descale_score(cur_score)
         else:
             cur_state_bin = convert_game_to_bin(cur_state)
             probabilities, pred_score = pred_model.predict(cur_state_bin)
             probabilities = probabilities[0]
-            pred_score = descale_score(pred_score[0])
+            v = pred_score[0]  # in leaf we use predicted score
+
         for a in range(4):  # Update probabilities
             tree[(cur_state_flat, a)] = (0, 0, 0, probabilities[a])
-
-        if pred_model is not None:
-            for s, a in path:  # Update path with estimated score
-                n_a, w_a, q_a, p_a = tree[(s, a)]
-                n_a += 1
-                w_a += pred_score
-                q_a = w_a / n_a
-                tree[(s, a)] = n_a, w_a, q_a, p_a
-
-        # get score - play till end
-        _, cur_score, cur_move_count = sim_from_state(cur_state, cur_score, cur_move_count, False)
-        v = cur_score / scale
 
         # update all path nodes in tree
         for s, a in path:
@@ -418,6 +410,11 @@ def get_next_move_MCTS(state, score, move_count, n, pred_model):
     for a in range(4):
         p = tree[(state.tostring(), a)][0]
         move_probabilities.append(p)
+
+    # need to normalise to probabilitites
+    prob_sum = sum(move_probabilities)
+    if prob_sum > 0:
+        move_probabilities = [el / prob_sum for el in move_probabilities]
 
     # print(tree[(state.tostring(), best_move)][2])
     return move_probabilities
