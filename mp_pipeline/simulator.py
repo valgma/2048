@@ -146,6 +146,6 @@ class Simulator(mp.Process):
         counts = [tree[(hs_state(game.state), a)][0] for a in range(4)]
 
         best_move, p = get_best_probs_from_count(counts)
-        self._tmp_memory.append((game.state, p))  # remember state and predicted move probabilities
+        self._tmp_memory.append((np.copy(game.state), p))  # remember state and predicted move probabilities
 
         return best_move
