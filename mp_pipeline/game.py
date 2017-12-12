@@ -160,37 +160,57 @@ class Game:
 
         return move_done
 
+    def sim_till_end(self, first_move=-1):
+        can_play = True
+
+        if first_move >= 0:
+            can_play = self.move_full(first_move)
+
+        while can_play:
+            move = random.randrange(4)
+            can_play = self.move_full(move)
+
+            if not can_play:
+                for trial_move in range(4):
+                    if trial_move != move:
+                        can_play = self.move_full(trial_move)
+                    if can_play:
+                        break
+
+            if not can_play:
+                break
+
+        return self.score
+
+    def copy_game(self):
+        new_game = Game()
+        new_game.state = np.copy(self.state)
+        new_game.score = self.score
+
+        return new_game
+
 
 @jit(nopython=True)
-def sim_till_end(game):
-    can_play = True
-
-    while can_play:
-        move = random.randrange(4)
-        can_play = game.move_full(move)
-
-        if not can_play:
-            for trial_move in range(4):
-                if trial_move != move:
-                    can_play = game.move_full(trial_move)
-                if can_play:
-                    break
-
-        if not can_play:
-            break
+def sim_from_state(game, first_move=-1):
+    cur_game = game.copy_game()
+    return cur_game.sim_till_end(first_move)
 
 
-# @jit(nopython=True)
+@jit(nopython=True)
+def sim_n_games_from_state(game, n, first_move=-1):
+    total_score = 0
+    for i in range(n):
+        total_score += sim_from_state(game, first_move)
+    return total_score / n
+
+
+@jit(nopython=True)
 def sim_n_games(n):
     total_score = 0
     for i in range(n):
         game = Game()
-        sim_till_end(game)
-        total_score += game.score
-
-    avg_score = total_score / n
-
-    return avg_score
+        total_score += sim_from_state(game, -1)
+    return total_score / n
 
 
 if __name__ == '__main__':

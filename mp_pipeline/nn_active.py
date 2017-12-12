@@ -29,7 +29,7 @@ class NeuralNetActive:
         self.model_ver = 0
 
     def run(self):
-        self.event_can_train.clear()
+
         i = 0
         while True:
             try:
@@ -41,15 +41,6 @@ class NeuralNetActive:
                 if i >= MAX_BATCH_SIZE:
                     self.handle_batch(i)
                     i = 0
-
-                    # after predicting a batch, check if we can retrain the model - do we have enough games
-                    if self.event_can_train.is_set():
-                        x, y = self.q_model_train.get()
-                        print('GOT TRAINING DATA')
-                        self.model.fit(x, y)
-                        self.event_can_train.clear()
-                        self.model.save('%s/model_ver_%d.h5' % (MODELS_PATH, self.model_ver))
-                        self.model_ver += 1
 
             except queue.Empty:
                 # havent gotten a message in a while, empty
@@ -67,6 +58,18 @@ class NeuralNetActive:
                 p = p_batch[i]
                 v = v_batch[i][0]
                 self.q_games[game_idx].put((p, v))  # send p, v to simulator
+
+        # after predicting a batch, check if we can retrain the model - do we have enough games
+        if self.event_can_train.is_set():
+            x, y = self.q_model_train.get()
+            # print('GOT TRAINING DATA OF SHAPE', x.shape, y.shape)
+            print('GOT TRAINING DATA OF LENGTH', len(x))
+            self.model.fit(x, y)
+            self.event_can_train.clear()
+            self.model.save('%s/cur_model.h5' % MODELS_PATH)
+            if self.model_ver % 10 == 0:  # save each 10th model...
+                self.model.save('%s/model_ver_%d.h5' % (MODELS_PATH, self.model_ver))
+            self.model_ver += 1
 
     def predict(self):
         # run NN

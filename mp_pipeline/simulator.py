@@ -11,19 +11,21 @@ import numpy as np
 import multiprocessing as mp
 import psutil
 import os
-from mp_pipeline.game import Game
-from mp_pipeline.utils import hs_state, copy_game, calc_move_scores, get_best_probs_from_count
+from mp_pipeline.game import Game, sim_from_state, sim_n_games_from_state
+from mp_pipeline.utils import hs_state, calc_move_scores, get_best_probs_from_count
 from mp_pipeline.utils import MCTS_TREE_SIZE
 
 
 class Simulator(mp.Process):
 
-    def __init__(self, idx, q_game, q_model, q_training_set):
+    def __init__(self, idx, q_game, q_model, q_training_set, nbr_of_games=-1, use_model=True):
         mp.Process.__init__(self)
         self.idx = idx
         self.q_game = q_game
         self.q_model = q_model
         self.q_training_set = q_training_set
+        self.nbr_of_games = nbr_of_games
+        self.use_model = use_model  # true - use NN to predict MCTS leaves, false - simulate with simple MC
 
         self._tmp_memory = []  # for each move (state, predicted_p)
         self._tmp_score = 0
@@ -37,14 +39,26 @@ class Simulator(mp.Process):
 
         i = 0
         while True:
-            i += 1
+            if self.nbr_of_games > 0 and i >= self.nbr_of_games:
+                break
+
             cur_score = self.simulate()
+            i += 1
             print(self.idx, 'game: %d, score: %.3f' % (i, cur_score))
 
+        print(self.idx, 'done')
+
     def get_prediction_from_nn(self, game):
-        # send state to NN and wait for answer
-        self.q_model.put((self.idx, game.state))
-        p, v = self.q_game.get()
+        if self.use_model:
+            # send state to NN and wait for answer
+            self.q_model.put((self.idx, game.state))
+            p, v = self.q_game.get()
+            # print(p, v)
+        else:  # this is actually not used since it seems to give worse result than simple MC, weird..
+            # simulate till end to get the score
+            # could be improved to use more simulations
+            v = sim_from_state(game) / np.maximum(game.score, 1000)  # TODO:????
+            p = 0.25 * np.ones(4, dtype=np.float32)
 
         return p, v
 
@@ -59,7 +73,14 @@ class Simulator(mp.Process):
         self._tmp_memory.clear()
 
     def get_next_move(self, game):
-        return self.get_next_move_mcts(game, tree_size=MCTS_TREE_SIZE)
+        if self.use_model:
+            best_move, p = self.get_next_move_mcts(game, tree_size=MCTS_TREE_SIZE)
+        else:
+            best_move, p = self.get_next_move_mc(game, 500)
+
+        self._tmp_memory.append((np.copy(game.state), p))  # remember state and predicted move probabilities
+
+        return best_move
 
     def simulate(self):
         self._tmp_memory.clear()
@@ -88,6 +109,15 @@ class Simulator(mp.Process):
 
         return game.score
 
+    def get_next_move_mc(self, game, n):
+        avg_scores = np.zeros(4, dtype=np.float32)
+        for a in range(4):
+            avg_scores[a] = sim_n_games_from_state(game, n, a)
+
+        best_move, p = get_best_probs_from_count(avg_scores)
+
+        return best_move, p
+
     def get_next_move_mcts(self, game, tree_size):
         """For each move, build MCTS. pick best move
         """
@@ -101,7 +131,7 @@ class Simulator(mp.Process):
         # now sim n games, when game reaches leaf -> simply evaluate game
         for _i in range(tree_size):
             path = []  # to keep track of current path, for updating
-            cur_game = copy_game(game)
+            cur_game = game.copy_game()
 
             cur_state_flat = hs_state(cur_game.state)
             # run till get to leaf
@@ -146,6 +176,5 @@ class Simulator(mp.Process):
         counts = [tree[(hs_state(game.state), a)][0] for a in range(4)]
 
         best_move, p = get_best_probs_from_count(counts)
-        self._tmp_memory.append((np.copy(game.state), p))  # remember state and predicted move probabilities
 
-        return best_move
+        return best_move, p

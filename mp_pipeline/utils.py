@@ -1,28 +1,18 @@
 import numpy as np
 from numba import jit
 import math
-from mp_pipeline.game import Game
 
-SAMPLE_AMOUNT = 2048  # nbr of data points for training model
-MAX_GAMES = 1_0  # nbr of games that are used for training NN: training states are sampled from these
-MAX_BATCH_SIZE = 4  # batch size (nbr of moves) for running NN prediction
+SAMPLE_AMOUNT = 500_000  # nbr of data points for training model
+MAX_GAMES = 1_00  # nbr of games that are used for training NN: training states are sampled from these
+MAX_BATCH_SIZE = 16  # batch size (nbr of moves) for running NN prediction
 NBR_CONCURRENT_GAMES = 2*MAX_BATCH_SIZE  # seems reasonable...
-MCTS_TREE_SIZE = 1_00
+MCTS_TREE_SIZE = 1_600
 MODELS_PATH = 'mp_pipeline/models'
 
 
 # has for dictionary that is used to keep the tree
 def hs_state(state):
     return state.tostring()
-
-
-@jit(nopython=True)
-def copy_game(game):
-    new_game = Game()
-    new_game.state = np.copy(game.state)
-    new_game.score = game.score
-
-    return new_game
 
 
 @jit(nopython=True)

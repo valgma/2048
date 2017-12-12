@@ -4,7 +4,7 @@ All imports should not be in global scope. If they are, then each time I spawn a
 messed up.
 """
 import numpy as np
-from mp_pipeline.utils import MAX_BATCH_SIZE, SAMPLE_AMOUNT
+from mp_pipeline.utils import MAX_BATCH_SIZE
 
 INPUT_SHAPE = (4, 4, 1)  # TODO: score??
 CONV_SIZE = 32
@@ -26,9 +26,10 @@ class NeuralNetwork:
         # print(prediction)
         return prediction
 
-    def fit(self, x, y):
+    def fit(self, x, y, nbr_epochs=1):
         # Lets just retrain always...no evaluation
-        self.model.fit(x=x, y=y, batch_size=SAMPLE_AMOUNT, epochs=1)  # TODO: batch_size?
+        # print(y)
+        self.model.fit(x=x, y=y, batch_size=2048, epochs=nbr_epochs)  # TODO: batch_size?
 
     def save(self, path):
         self.model.save(path)
@@ -53,7 +54,8 @@ class NeuralNetwork:
         value_out = NeuralNetwork.value_head(residual_output)
 
         model = Model(inputs=x, outputs=(policy_out, value_out))  #
-        model.compile(loss=["categorical_crossentropy", "mean_squared_error"], optimizer=Adam(), metrics=['accuracy'])
+        model.compile(loss=["categorical_crossentropy", "mean_squared_error"], loss_weights=[1.0, 1.0],
+                      optimizer=Adam(), metrics=['accuracy'])
 
         return model
 
@@ -106,12 +108,4 @@ class NeuralNetwork:
 if __name__ == '__main__':
     model = NeuralNetwork()
     print('-------------')
-    model.fit(np.ones((SAMPLE_AMOUNT, 4, 4, 1)), [0.25*np.ones((SAMPLE_AMOUNT, 4)), np.ones(SAMPLE_AMOUNT)])
-    import time
 
-    t1 = time.time()
-    n = 100
-    for i in range(n):
-        model.query_model(np.ones((MAX_BATCH_SIZE, 4, 4)))
-    t2 = time.time()
-    print('predictions:', n*MAX_BATCH_SIZE, 'time:', t2-t1)

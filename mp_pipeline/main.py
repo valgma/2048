@@ -25,10 +25,12 @@ from mp_pipeline.nn_active import NeuralNetActive
 from mp_pipeline.nn import NeuralNetwork
 from mp_pipeline.training_set import TrainingSet
 from mp_pipeline.utils import print_consts
-from mp_pipeline.utils import NBR_CONCURRENT_GAMES
+from mp_pipeline.utils import NBR_CONCURRENT_GAMES, MAX_GAMES, SAMPLE_AMOUNT
 
 
 if __name__ == '__main__':
+    train_with_simple_mcts = True  # if set, simulates games with simepl mcts (without model) for initial training
+
     print_consts()
 
     q_model = mp.Queue()
@@ -40,6 +42,28 @@ if __name__ == '__main__':
     # start training set
     training_set = TrainingSet(q_training_set, q_model_train, event_can_train)
     training_set.start()
+
+    if train_with_simple_mcts:
+        nbr_games = 2*NBR_CONCURRENT_GAMES  # should be a multiple of NBR_OF_CONCURRENT_GAMES
+        sample_amount = 2_000_000  # how many moves are used to train the model
+
+        q_training_set.put((None, 'MAX_GAMES', nbr_games))
+        q_training_set.put((None, 'SAMPLE_AMOUNT', sample_amount))
+
+        # start games - without model, simply let them run till end
+        games_per_sim = nbr_games // NBR_CONCURRENT_GAMES
+        proc_games = [Simulator(idx, q_game, q_model, q_training_set, games_per_sim, False) for idx, q_game in q_games.items()]
+
+        for p in proc_games:
+            p.start()
+        for p in proc_games:
+            p.join()
+
+        # after this we have generated all data for training set, just in case need to clean up
+        # training set should also have sent all data to model queue, once NN starts, it simpy gets it
+        q_training_set.put((None, 'MAX_GAMES', MAX_GAMES))
+        q_training_set.put((None, 'SAMPLE_AMOUNT', SAMPLE_AMOUNT))
+        q_training_set.put((None, 'CLEAR'))
 
     # start games
     proc_games = [Simulator(idx, q_game, q_model, q_training_set) for idx, q_game in q_games.items()]
