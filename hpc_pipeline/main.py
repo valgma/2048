@@ -29,7 +29,7 @@ from utils import NBR_CONCURRENT_GAMES, MAX_GAMES, SAMPLE_AMOUNT
 import logging
 
 if __name__ == '__main__':
-    train_with_simple_mcts = True  # if set, simulates games with simepl mcts (without model) for initial training
+    train_with_simple_mcts = False  # if set, simulates games with simepl mcts (without model) for initial training
     logger = logging.getLogger()
     handler = logging.StreamHandler()
     formatter = logging.Formatter(
